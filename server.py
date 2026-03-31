@@ -936,37 +936,49 @@ async def delete_org_operator(username: str, current_user: UserResponse = Depend
     await db.users.delete_one({"username": username})
     return {"message": f"Operator '{username}' deleted"}
 
-# ============ SMTP EMAIL HELPER ============
+# ============ BREVO EMAIL HELPER ============
+import os
+import requests
+import logging
 
-SMTP_SERVER   = os.environ.get("SMTP_SERVER", "")
-SMTP_PORT     = int(os.environ.get("SMTP_PORT", 587))
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-SMTP_FROM     = os.environ.get("SMTP_FROM_NAME", "AgriGear ERP")
-FRONTEND_URL  = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+# Load new Brevo variables
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+BREVO_SENDER_EMAIL = os.environ.get("BREVO_SENDER_EMAIL", "") # Must be your verified Brevo email
+SMTP_FROM = os.environ.get("SMTP_FROM_NAME", "AgriGear ERP")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+def _send_brevo_email(to_email: str, subject: str, html_content: str):
+    """Internal helper to fire the HTTP request to Brevo."""
+    if not BREVO_API_KEY or not BREVO_SENDER_EMAIL:
+        raise ValueError("BREVO_API_KEY or BREVO_SENDER_EMAIL is missing.")
+        
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "accept": "application/json",
+        "api-key": BREVO_API_KEY,
+        "content-type": "application/json"
+    }
+    payload = {
+        "sender": {"name": SMTP_FROM, "email": BREVO_SENDER_EMAIL},
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html_content
+    }
+    response = requests.post(url, json=payload, headers=headers)
+    response.raise_for_status() # Throws an exception if it fails
+    return response
 
 def send_reset_email(to_email: str, reset_link: str):
-    """Send password reset email via SMTP with strict Gmail TLS sequence."""
-
-    # ── 1. Environment Variable Validation ──────────────────────────────────
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
+    """Send password reset email via Brevo API."""
+    if not BREVO_API_KEY or not BREVO_SENDER_EMAIL:
         print("\n" + "="*60)
-        print("WARNING: SMTP credentials not found in environment.")
-        print(f"  SMTP_SERVER   = '{SMTP_SERVER}'")
-        print(f"  SMTP_PORT     = {SMTP_PORT}")
-        print(f"  SMTP_USERNAME = '{SMTP_USERNAME}'")
-        print(f"  SMTP_PASSWORD = {'[SET]' if SMTP_PASSWORD else '[EMPTY]'}")
+        print("WARNING: Brevo credentials not found in environment.")
         print("  → Falling back to terminal link output.")
         print("="*60)
         print(f"\n>>> [DEV] PASSWORD RESET LINK for {to_email}:\n    {reset_link}\n")
         logging.info(f"[PASSWORD RESET] Link for {to_email}: {reset_link}")
         return
 
-    # ── 2. Build the HTML email ──────────────────────────────────────────────
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "AgriGear ERP - Password Reset Request"
-    msg["From"]    = f"{SMTP_FROM} <{SMTP_USERNAME}>"
-    msg["To"]      = to_email
     html_body = f"""
     <html><body style="font-family:sans-serif;max-width:600px;margin:auto">
       <div style="background:#0F3D3E;padding:24px;border-radius:8px 8px 0 0">
@@ -981,40 +993,25 @@ def send_reset_email(to_email: str, reset_link: str):
       </div>
     </body></html>
     """
-    msg.attach(MIMEText(html_body, "html"))
 
-    # ── 3. Strict TLS SMTP Sequence (Gmail standard) ─────────────────────────
-    print(f"\n[EMAIL] Attempting SMTP connection → {SMTP_SERVER}:{SMTP_PORT} as {SMTP_USERNAME}")
+    print(f"\n[EMAIL] Attempting Brevo API connection for {to_email}")
     try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.ehlo()                              # Identify to server
-        server.starttls()                          # Upgrade to TLS (mandatory for Gmail port 587)
-        server.ehlo()                              # Re-identify after TLS upgrade
-        server.login(SMTP_USERNAME, SMTP_PASSWORD) # Authenticate
-        server.send_message(msg)                   # Send
-        server.quit()                              # Graceful disconnect
+        _send_brevo_email(to_email, "AgriGear ERP - Password Reset Request", html_body)
         print(f"SUCCESS: Password reset email sent to {to_email}")
         logging.info(f"[EMAIL] Password reset sent to {to_email}")
     except Exception as e:
-        print(f"\nSMTP EXCEPTION: {str(e)}")
-        print(f"  Server : {SMTP_SERVER}:{SMTP_PORT}")
-        print(f"  User   : {SMTP_USERNAME}")
-        logging.error(f"[EMAIL] SMTP failure for {to_email}: {str(e)}")
-        # Fallback: always print the link so the user isn't blocked
+        print(f"\nBREVO API EXCEPTION: {str(e)}")
+        logging.error(f"[EMAIL] Brevo API failure for {to_email}: {str(e)}")
         print(f">>> [FALLBACK] PASSWORD RESET LINK for {to_email}:\n    {reset_link}\n")
 
 def send_reply_email(to_email: str, message_text: str):
-    """Send admin reply email via SMTP with strict Gmail TLS sequence."""
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
+    """Send admin reply email via Brevo API."""
+    if not BREVO_API_KEY or not BREVO_SENDER_EMAIL:
         print("\n" + "="*60)
-        print(f"WARNING: SMTP credentials missing. Fake sent reply to {to_email}: {message_text}")
+        print(f"WARNING: Brevo credentials missing. Fake sent reply to {to_email}: {message_text}")
         print("="*60)
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "AgriGear ERP - Support Reply"
-    msg["From"]    = f"{SMTP_FROM} <{SMTP_USERNAME}>"
-    msg["To"]      = to_email
     html_body = f"""
     <html><body style="font-family:sans-serif;max-width:600px;margin:auto">
       <div style="background:#0F3D3E;padding:24px;border-radius:8px 8px 0 0">
@@ -1030,27 +1027,20 @@ def send_reply_email(to_email: str, message_text: str):
       </div>
     </body></html>
     """
-    msg.attach(MIMEText(html_body, "html"))
 
-    print(f"\n[EMAIL] Attempting SMTP connection → {SMTP_SERVER}:{SMTP_PORT} as {SMTP_USERNAME}")
+    print(f"\n[EMAIL] Attempting Brevo API connection for support reply to {to_email}")
     try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.send_message(msg)
-        server.quit()
+        _send_brevo_email(to_email, "AgriGear ERP - Support Reply", html_body)
         print(f"SUCCESS: Reply email sent to {to_email}")
     except Exception as e:
-        print(f"\nSMTP EXCEPTION: {str(e)}")
-        logging.error(f"[EMAIL] SMTP failure for {to_email}: {str(e)}")
+        print(f"\nBREVO API EXCEPTION: {str(e)}")
+        logging.error(f"[EMAIL] Brevo API failure for {to_email}: {str(e)}")
 
 def send_welcome_email(to_email: str, owner_name: str, company_name: str, username: str, temp_password: str, role_title: str = "Owner"):
-    """Send 'Welcome to AgriGear ERP' email with login credentials."""
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
+    """Send 'Welcome to AgriGear ERP' email with login credentials via Brevo."""
+    if not BREVO_API_KEY or not BREVO_SENDER_EMAIL:
         print("\n" + "="*60)
-        print(f"WARNING: SMTP credentials missing. Printing credentials to terminal instead.")
+        print(f"WARNING: Brevo credentials missing. Printing credentials to terminal instead.")
         print(f"  TO: {to_email}")
         print(f"  Name: {owner_name}")
         print(f"  Role: {role_title}")
@@ -1061,10 +1051,6 @@ def send_welcome_email(to_email: str, owner_name: str, company_name: str, userna
         print("="*60)
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Welcome to AgriGear ERP \u2014 {company_name}"
-    msg["From"]    = f"{SMTP_FROM} <{SMTP_USERNAME}>"
-    msg["To"]      = to_email
     html_body = f"""
     <html><body style="font-family:sans-serif;max-width:600px;margin:auto">
       <div style="background:#16a34a;padding:24px;border-radius:12px 12px 0 0;text-align:center">
@@ -1085,25 +1071,18 @@ def send_welcome_email(to_email: str, owner_name: str, company_name: str, userna
       </div>
     </body></html>
     """
-    msg.attach(MIMEText(html_body, "html"))
 
     print(f"\n[EMAIL] Sending welcome email to {to_email} for org '{company_name}' as {role_title}")
     try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(SMTP_USERNAME, SMTP_PASSWORD)
-        server.send_message(msg)
-        server.quit()
+        _send_brevo_email(to_email, f"Welcome to AgriGear ERP \u2014 {company_name}", html_body)
         print(f"SUCCESS: Welcome email sent to {to_email}")
     except Exception as e:
-        print(f"\nSMTP EXCEPTION: {str(e)}")
+        print(f"\nBREVO API EXCEPTION: {str(e)}")
         print(f">>> [FALLBACK] Credentials for {to_email}:")
         print(f"    Username: {username}")
         print(f"    Password: {temp_password}")
-        logging.error(f"[EMAIL] SMTP failure for welcome email to {to_email}: {str(e)}")
-
+        logging.error(f"[EMAIL] Brevo failure for welcome email to {to_email}: {str(e)}")
+        
 # ============ PASSWORD RESET FLOW ============
 
 @api_router.post("/auth/forgot-password")

@@ -1,39 +1,40 @@
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 from dotenv import load_dotenv
 
-# Force Python to read the .env file
+# Force Python to read the .env file (for local testing)
 load_dotenv()
 
-
 def send_approval_email(to_email: str, name: str, temp_password: str):
-    sender_email = os.getenv("SMTP_EMAIL")
-    sender_password = os.getenv("SMTP_PASSWORD")
+    api_key = os.getenv("BREVO_API_KEY")
+    sender_email = os.getenv("BREVO_SENDER_EMAIL")
+    sender_name = os.getenv("SMTP_FROM_NAME", "AgriGear ERP")
 
-    # Debugging logs to guarantee they loaded (Will print in the backend terminal)
-    print(f"[DEBUG EMAIL] Loaded Email: {sender_email}")
-    print(f"[DEBUG EMAIL] Password Loaded: {'YES' if sender_password else 'NO'}")
+    # Debugging logs to guarantee they loaded 
+    print(f"[DEBUG EMAIL] Loaded Sender Email: {sender_email}")
+    print(f"[DEBUG EMAIL] API Key Loaded: {'YES' if api_key else 'NO'}")
 
-    if not sender_email or not sender_password:
-        print("[ERROR] SMTP credentials are None. Check your .env file keys!")
+    if not api_key or not sender_email:
+        print("[ERROR] Brevo credentials are None. Check your environment variables!")
         return
 
-    msg = MIMEMultipart()
-    msg['From'] = sender_email
-    msg['To'] = to_email
-    msg['Subject'] = "Your AgriGear ERP Account is Approved!"
-
-    body = f"Hello {name},\n\nYour account has been approved by the Admin.\n\nYour temporary password is: {temp_password}\n\nPlease log in and change your password."
-    msg.attach(MIMEText(body, 'plain'))
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {
+        "accept": "application/json",
+        "api-key": api_key,
+        "content-type": "application/json"
+    }
+    
+    payload = {
+        "sender": {"name": sender_name, "email": sender_email},
+        "to": [{"email": to_email}],
+        "subject": "Your AgriGear ERP Account is Approved!",
+        "textContent": f"Hello {name},\n\nYour account has been approved by the Admin.\n\nYour temporary password is: {temp_password}\n\nPlease log in and change your password."
+    }
 
     try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
-        print(f"[EMAIL SUCCESS] Sent to {to_email}")
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        print(f"[EMAIL SUCCESS] Sent to {to_email} via Brevo API")
     except Exception as e:
         print(f"[EMAIL FAILED] {e}")
